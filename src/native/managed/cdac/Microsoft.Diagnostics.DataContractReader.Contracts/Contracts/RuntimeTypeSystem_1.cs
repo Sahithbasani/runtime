@@ -74,13 +74,13 @@ internal partial struct RuntimeTypeSystem_1 : IRuntimeTypeSystem
     {
         public TypeKey(ITypeHandle typeHandle, CorElementType elementType, int rank, ImmutableArray<ITypeHandle> typeArgs, SignatureCallingConvention callConv = SignatureCallingConvention.Default)
         {
-            ITypeHandle = typeHandle;
+            TypeHandle = typeHandle;
             ElementType = elementType;
             Rank = rank;
             TypeArgs = typeArgs;
             CallConv = callConv;
         }
-        public ITypeHandle ITypeHandle { get; }
+        public ITypeHandle TypeHandle { get; }
         public CorElementType ElementType { get; }
         public int Rank { get; }
         public ImmutableArray<ITypeHandle> TypeArgs { get; }
@@ -88,7 +88,7 @@ internal partial struct RuntimeTypeSystem_1 : IRuntimeTypeSystem
 
         public bool Equals(TypeKey other)
         {
-            if (ElementType != other.ElementType || Rank != other.Rank || CallConv != other.CallConv || TypeArgs.Length != other.TypeArgs.Length || !ITypeHandle.Equals(other.TypeHandle))
+            if (ElementType != other.ElementType || Rank != other.Rank || CallConv != other.CallConv || TypeArgs.Length != other.TypeArgs.Length || !TypeHandle.Equals(other.TypeHandle))
                 return false;
             for (int i = 0; i < TypeArgs.Length; i++)
             {
@@ -102,7 +102,7 @@ internal partial struct RuntimeTypeSystem_1 : IRuntimeTypeSystem
 
         public override int GetHashCode()
         {
-            int hash = HashCode.Combine(ITypeHandle.GetHashCode(), (int)ElementType, Rank, (int)CallConv);
+            int hash = HashCode.Combine(TypeHandle.GetHashCode(), (int)ElementType, Rank, (int)CallConv);
             foreach (ITypeHandle th in TypeArgs)
             {
                 hash = HashCode.Combine(hash, th.GetHashCode());
@@ -351,15 +351,16 @@ internal partial struct RuntimeTypeSystem_1 : IRuntimeTypeSystem
             TargetPointer perInstInfo = _desc.PerInstInfo;
             if ((perInstInfo == TargetPointer.Null) || (numGenericArgs == 0))
             {
-                Instantiation = System.Array.Empty<ITypeHandle>();
+                Instantiation = ImmutableArray<ITypeHandle>.Empty;
             }
             else
             {
-                Instantiation = new ITypeHandle[numGenericArgs];
+                var builder = ImmutableArray.CreateBuilder<ITypeHandle>(numGenericArgs);
                 for (int i = 0; i < numGenericArgs; i++)
                 {
-                    Instantiation[i] = rts.GetTypeHandle(target.ReadPointer(perInstInfo + (ulong)target.PointerSize * (ulong)i));
+                    builder.Add(rts.GetTypeHandle(target.ReadPointer(perInstInfo + (ulong)target.PointerSize * (ulong)i)));
                 }
+                Instantiation = builder.MoveToImmutable();
             }
         }
 
@@ -368,7 +369,7 @@ internal partial struct RuntimeTypeSystem_1 : IRuntimeTypeSystem
         internal bool IsGenericMethodDefinition => HasFlags(InstantiatedMethodDescFlags2.KindMask, InstantiatedMethodDescFlags2.GenericMethodDefinition);
         internal bool HasPerInstInfo => _desc.PerInstInfo != TargetPointer.Null;
         internal bool HasMethodInstantiation => IsGenericMethodDefinition || HasPerInstInfo;
-        public ITypeHandle[] Instantiation { get; }
+        public ImmutableArray<ITypeHandle> Instantiation { get; }
     }
 
     private sealed class DynamicMethodDesc : IData<DynamicMethodDesc>
@@ -474,14 +475,14 @@ internal partial struct RuntimeTypeSystem_1 : IRuntimeTypeSystem
         // if we already validated this address, return a handle
         if (_methodTables.ContainsKey(typeHandlePointer))
         {
-            return new ITypeHandle(typeHandlePointer);
+            return new TargetTypeHandle(typeHandlePointer);
         }
 
         // Check for a TypeDesc
         if (addressLowBits == TypeHandleBits.TypeDesc)
         {
             // This is a TypeDesc
-            return new ITypeHandle(typeHandlePointer);
+            return new TargetTypeHandle(typeHandlePointer);
         }
 
         TargetPointer methodTablePointer = typeHandlePointer;
@@ -492,7 +493,7 @@ internal partial struct RuntimeTypeSystem_1 : IRuntimeTypeSystem
             // we already cached the data, we must have validated the address, create the representation struct for our use
             MethodTable trustedMethodTable = new MethodTable(methodTableData);
             _ = _methodTables.TryAdd(methodTablePointer, trustedMethodTable);
-            return new ITypeHandle(methodTablePointer);
+            return new TargetTypeHandle(methodTablePointer);
         }
 
         // If it's the free object method table, we trust it to be valid
@@ -501,7 +502,7 @@ internal partial struct RuntimeTypeSystem_1 : IRuntimeTypeSystem
             Data.MethodTable freeObjectMethodTableData = _target.ProcessedData.GetOrAdd<Data.MethodTable>(methodTablePointer);
             MethodTable trustedMethodTable = new MethodTable(freeObjectMethodTableData);
             _ = _methodTables.TryAdd(methodTablePointer, trustedMethodTable);
-            return new ITypeHandle(methodTablePointer);
+            return new TargetTypeHandle(methodTablePointer);
         }
 
         // Otherwse, get ready to validate
@@ -513,7 +514,7 @@ internal partial struct RuntimeTypeSystem_1 : IRuntimeTypeSystem
         Data.MethodTable trustedMethodTableData = _target.ProcessedData.GetOrAdd<Data.MethodTable>(methodTablePointer);
         MethodTable trustedMethodTableF = new MethodTable(trustedMethodTableData);
         _ = _methodTables.TryAdd(methodTablePointer, trustedMethodTableF);
-        return new ITypeHandle(methodTablePointer);
+        return new TargetTypeHandle(methodTablePointer);
     }
     public TargetPointer GetModule(ITypeHandle typeHandle)
     {
@@ -798,14 +799,14 @@ internal partial struct RuntimeTypeSystem_1 : IRuntimeTypeSystem
         return dynamicStaticsInfo.NonGCStatics;
     }
 
-    public ReadOnlySpan<ITypeHandle> GetInstantiation(ITypeHandle typeHandle)
+    public ImmutableArray<ITypeHandle> GetInstantiation(ITypeHandle typeHandle)
     {
         if (!typeHandle.IsMethodTable())
-            return default;
+            return ImmutableArray<ITypeHandle>.Empty;
 
         MethodTable methodTable = _methodTables[typeHandle.Address];
         if (!methodTable.Flags.HasInstantiation)
-            return default;
+            return ImmutableArray<ITypeHandle>.Empty;
 
         return _target.ProcessedData.GetOrAdd<TypeInstantiation>(typeHandle.Address).TypeHandles;
     }
@@ -832,7 +833,7 @@ internal partial struct RuntimeTypeSystem_1 : IRuntimeTypeSystem
     {
         public static TypeInstantiation Create(Target target, TargetPointer address) => new TypeInstantiation(target, address);
 
-        public ITypeHandle[] ITypeHandles { get; }
+        public ImmutableArray<ITypeHandle> TypeHandles { get; }
         private TypeInstantiation(Target target, TargetPointer typePointer)
         {
             RuntimeTypeSystem_1 rts = (RuntimeTypeSystem_1)target.Contracts.RuntimeTypeSystem;
@@ -848,11 +849,12 @@ internal partial struct RuntimeTypeSystem_1 : IRuntimeTypeSystem
             TargetPointer dictionaryPointer = target.ReadPointer(perInstInfo + (ulong)target.PointerSize * (ulong)(genericsDictInfo.NumDicts - 1));
 
             int numberOfGenericArgs = genericsDictInfo.NumTypeArgs;
-            ITypeHandles = new ITypeHandle[numberOfGenericArgs];
+            var builder = ImmutableArray.CreateBuilder<ITypeHandle>(numberOfGenericArgs);
             for (int i = 0; i < numberOfGenericArgs; i++)
             {
-                ITypeHandles[i] = rts.GetTypeHandle(target.ReadPointer(dictionaryPointer + (ulong)target.PointerSize * (ulong)i));
+                builder.Add(rts.GetTypeHandle(target.ReadPointer(dictionaryPointer + (ulong)target.PointerSize * (ulong)i)));
             }
+            TypeHandles = builder.MoveToImmutable();
         }
     }
 
@@ -872,7 +874,7 @@ internal partial struct RuntimeTypeSystem_1 : IRuntimeTypeSystem
 
             else if (type == CorElementType.FnPtr)
             {
-                _ = IsFunctionPointer(typeHandle, out ReadOnlySpan<ITypeHandle> signatureTypeArgs, out _);
+                _ = IsFunctionPointer(typeHandle, out ImmutableArray<ITypeHandle> signatureTypeArgs, out _);
                 foreach (ITypeHandle sigTypeArg in signatureTypeArgs)
                 {
                     if (ContainsGenericVariables(sigTypeArg))
@@ -1053,7 +1055,7 @@ internal partial struct RuntimeTypeSystem_1 : IRuntimeTypeSystem
 
     private bool GenericInstantiationMatch(ITypeHandle genericType, ITypeHandle potentialMatch, ImmutableArray<ITypeHandle> typeArguments)
     {
-        ReadOnlySpan<ITypeHandle> instantiation = GetInstantiation(potentialMatch);
+        ImmutableArray<ITypeHandle> instantiation = GetInstantiation(potentialMatch);
         if (instantiation.Length != typeArguments.Length)
             return false;
 
@@ -1083,7 +1085,7 @@ internal partial struct RuntimeTypeSystem_1 : IRuntimeTypeSystem
 
     private bool FnPtrMatch(ITypeHandle candidate, ImmutableArray<ITypeHandle> retAndArgTypes, SignatureCallingConvention callConv)
     {
-        if (!IsFunctionPointer(candidate, out ReadOnlySpan<ITypeHandle> candidateRetAndArgs, out SignatureCallingConvention candidateCallConv))
+        if (!IsFunctionPointer(candidate, out ImmutableArray<ITypeHandle> candidateRetAndArgs, out SignatureCallingConvention candidateCallConv))
             return false;
         if (candidateCallConv != callConv)
             return false;
@@ -1114,9 +1116,9 @@ internal partial struct RuntimeTypeSystem_1 : IRuntimeTypeSystem
 
     ITypeHandle IRuntimeTypeSystem.GetConstructedType(ITypeHandle typeHandle, CorElementType corElementType, int rank, ImmutableArray<ITypeHandle> typeArguments, SignatureCallingConvention callConv)
     {
-        if (typeHandle.Address == TargetPointer.Null && corElementType != CorElementType.FnPtr)
-            return new ITypeHandle(TargetPointer.Null);
-        if (_typeHandles.TryGetValue(new TypeKey(typeHandle, corElementType, rank, typeArguments, callConv), out ITypeHandle existing))
+        if (typeHandle.IsNull && corElementType != CorElementType.FnPtr)
+            return ITypeHandle.Null;
+        if (_typeHandles.TryGetValue(new TypeKey(typeHandle, corElementType, rank, typeArguments, callConv), out ITypeHandle? existing) && existing is not null)
             return existing;
         ILoader loaderContract = _target.Contracts.Loader;
         TargetPointer loaderModule;
@@ -1152,7 +1154,7 @@ internal partial struct RuntimeTypeSystem_1 : IRuntimeTypeSystem
                 return potentialMatch;
             }
         }
-        return new ITypeHandle(TargetPointer.Null);
+        return ITypeHandle.Null;
     }
 
     // Mirrors the native algorithm
@@ -1233,9 +1235,9 @@ internal partial struct RuntimeTypeSystem_1 : IRuntimeTypeSystem
         return false;
     }
 
-    public bool IsFunctionPointer(ITypeHandle typeHandle, out ReadOnlySpan<ITypeHandle> retAndArgTypes, out SignatureCallingConvention callConv)
+    public bool IsFunctionPointer(ITypeHandle typeHandle, out ImmutableArray<ITypeHandle> retAndArgTypes, out SignatureCallingConvention callConv)
     {
-        retAndArgTypes = default;
+        retAndArgTypes = ImmutableArray<ITypeHandle>.Empty;
         callConv = default;
 
         if (!typeHandle.IsTypeDesc())
@@ -1300,7 +1302,7 @@ internal partial struct RuntimeTypeSystem_1 : IRuntimeTypeSystem
     {
         public static FunctionPointerRetAndArgs Create(Target target, TargetPointer address) => new FunctionPointerRetAndArgs(target, address);
 
-        public ITypeHandle[] ITypeHandles { get; }
+        public ImmutableArray<ITypeHandle> TypeHandles { get; }
         private FunctionPointerRetAndArgs(Target target, TargetPointer typePointer)
         {
             RuntimeTypeSystem_1 rts = (RuntimeTypeSystem_1)target.Contracts.RuntimeTypeSystem;
@@ -1309,11 +1311,12 @@ internal partial struct RuntimeTypeSystem_1 : IRuntimeTypeSystem
             TargetPointer retAndArgs = fnPtrTypeDesc.RetAndArgTypes;
             int numberOfRetAndArgTypes = checked((int)fnPtrTypeDesc.NumArgs + 1);
 
-            ITypeHandles = new ITypeHandle[numberOfRetAndArgTypes];
+            var builder = ImmutableArray.CreateBuilder<ITypeHandle>(numberOfRetAndArgTypes);
             for (int i = 0; i < numberOfRetAndArgTypes; i++)
             {
-                ITypeHandles[i] = rts.GetTypeHandle(target.ReadPointer(retAndArgs + (ulong)target.PointerSize * (ulong)i));
+                builder.Add(rts.GetTypeHandle(target.ReadPointer(retAndArgs + (ulong)target.PointerSize * (ulong)i)));
             }
+            TypeHandles = builder.MoveToImmutable();
         }
     }
 
@@ -1381,12 +1384,12 @@ internal partial struct RuntimeTypeSystem_1 : IRuntimeTypeSystem
         return AsInstantiatedMethodDesc(methodDesc).IsGenericMethodDefinition;
     }
 
-    public ReadOnlySpan<ITypeHandle> GetGenericMethodInstantiation(MethodDescHandle methodDescHandle)
+    public ImmutableArray<ITypeHandle> GetGenericMethodInstantiation(MethodDescHandle methodDescHandle)
     {
         MethodDesc methodDesc = _methodDescs[methodDescHandle.Address];
 
         if (methodDesc.Classification != MethodClassification.Instantiated)
-            return default;
+            return ImmutableArray<ITypeHandle>.Empty;
 
         return AsInstantiatedMethodDesc(methodDesc).Instantiation;
     }
@@ -2085,16 +2088,16 @@ internal partial struct RuntimeTypeSystem_1 : IRuntimeTypeSystem
         {
             TargetPointer enclosingMT = ((IRuntimeTypeSystem)this).GetMTOfEnclosingClass(fieldDescPointer);
             if (enclosingMT == TargetPointer.Null)
-                return default;
+                return ITypeHandle.Null;
             ITypeHandle enclosingType = GetTypeHandle(enclosingMT);
             TargetPointer modulePtr = GetModule(enclosingType);
             if (modulePtr == TargetPointer.Null)
-                return default;
+                return ITypeHandle.Null;
 
             ModuleHandle moduleHandle = _target.Contracts.Loader.GetModuleHandleFromModulePtr(modulePtr);
             MetadataReader? mdReader = _target.Contracts.EcmaMetadata.GetMetadata(moduleHandle);
             if (mdReader is null)
-                return default;
+                return ITypeHandle.Null;
 
             uint memberDef = ((IRuntimeTypeSystem)this).GetFieldDescMemberDef(fieldDescPointer);
             FieldDefinitionHandle fieldDefHandle = (FieldDefinitionHandle)MetadataTokens.Handle((int)memberDef);
@@ -2104,7 +2107,7 @@ internal partial struct RuntimeTypeSystem_1 : IRuntimeTypeSystem
         }
         catch
         {
-            return default;
+            return ITypeHandle.Null;
         }
     }
 
