@@ -337,11 +337,14 @@ internal class GcInfoDecoder<TTraits> : IGCInfoDecoder where TTraits : IGCInfoTr
         _safePointBitOffset = _bitOffset;
         uint numBitsPerOffset = CeilOfLog2(TTraits.NormalizeCodeOffset(_codeLength));
 
+        // Eagerly decode safe point offsets in normalized form (matching the on-disk encoding).
+        // FindSafePoint normalizes the query offset before comparing, so these stay normalized.
+        // GetSafePoints() denormalizes them on the way out for consumers that need real offsets.
         _safePoints = new List<uint>((int)_numSafePoints);
         for (uint i = 0; i < _numSafePoints; i++)
         {
-            uint offset = TTraits.DenormalizeCodeOffset((uint)_reader.ReadBits((int)numBitsPerOffset, ref _bitOffset));
-            _safePoints.Add(offset);
+            uint normalizedOffset = (uint)_reader.ReadBits((int)numBitsPerOffset, ref _bitOffset);
+            _safePoints.Add(normalizedOffset);
         }
 
         yield break;
@@ -540,7 +543,8 @@ internal class GcInfoDecoder<TTraits> : IGCInfoDecoder where TTraits : IGCInfoTr
     public IReadOnlyList<uint> GetSafePoints()
     {
         EnsureDecodedTo(DecodePoints.InterruptibleRanges);
-        return _safePoints;
+        // _safePoints stores normalized offsets; denormalize for external consumers.
+        return _safePoints.Select(TTraits.DenormalizeCodeOffset).ToList();
     }
 
     public GCInfoHeader GetHeader()
@@ -1195,14 +1199,15 @@ internal class GcInfoDecoder<TTraits> : IGCInfoDecoder where TTraits : IGCInfoTr
     {
         EnsureDecodedTo(DecodePoints.InterruptibleRanges);
 
+        uint normBreakOffset = TTraits.NormalizeCodeOffset(codeOffset);
+
         // TODO(stackref): The native FindSafePoint uses binary search (NarrowSafePointSearch)
         // when numSafePoints > 32. This is a performance optimization only — no correctness impact.
-        // Linear scan through safe point offsets from the saved position
         for (uint i = 0; i < _safePoints.Count; i++)
         {
-            if (_safePoints[(int)i] == codeOffset)
+            if (_safePoints[(int)i] == normBreakOffset)
                 return i;
-            if (_safePoints[(int)i] > codeOffset)
+            if (_safePoints[(int)i] > normBreakOffset)
                 break;
         }
 
